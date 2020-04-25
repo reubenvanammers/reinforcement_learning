@@ -12,7 +12,6 @@ import time
 from torch.utils.tensorboard import SummaryWriter
 from torch import multiprocessing
 
-
 # if torch.cuda.is_available():is_available
 #     map_location = lambda storage, loc: storage.cuda()
 # else:
@@ -33,6 +32,9 @@ class SelfPlayScheduler:
             policy_kwargs={},
             opposing_policy_args=[],
             opposing_policy_kwargs={},
+            evaluator=None,
+            evaluator_args=[],
+            evaluator_kwargs={},
             swap_sides=True,
             save_dir="saves",
             epoch_length=500,
@@ -45,6 +47,9 @@ class SelfPlayScheduler:
         self.opposing_policy = opposing_policy_gen(*opposing_policy_args, **opposing_policy_kwargs)
         self.opposing_policy_args = opposing_policy_args
         self.opposing_policy_kwargs = opposing_policy_kwargs
+        self.evaluator = evaluator
+        self.evaluator_args = evaluator_args
+        self.evaluator_kwargs = evaluator_kwargs
         self.env_gen = env_gen
         self.swap_sides = swap_sides
         self.save_dir = save_dir
@@ -69,6 +74,9 @@ class SelfPlayScheduler:
                 self.memory_queue,
                 self.result_queue,
                 self.env_gen,
+                evaluator=self.evaluator,
+                evaluator_args=self.evaluator_args,
+                evaluator_kwargs=self.evaluator_kwargs,
                 policy_gen=self.policy_gen,
                 opposing_policy_gen=self.opposing_policy_gen,
                 policy_args=deepcopy(self.policy_args),
@@ -83,7 +91,8 @@ class SelfPlayScheduler:
         for w in player_workers:
             w.start()
 
-        policy = self.policy_gen(*self.policy_args, **self.policy_kwargs, memory_queue=self.memory_queue)
+        policy = self.policy_gen(evaluator=self.evaluator(*self.evaluator_args, **self.evaluator_kwargs),
+                                 *self.policy_args, **self.policy_kwargs, memory_queue=self.memory_queue)
 
         # while not policy.ready:
         #     if self.task_queue.empty():
@@ -176,13 +185,22 @@ class SelfPlayWorker(multiprocessing.Process):
             policy_kwargs={},
             opposing_policy_args=[],
             opposing_policy_kwargs={},
+            evaluator=None,
+            evaluator_args=[],
+            evaluator_kwargs={},
             save_dir='save_dir',
             resume=False,
     ):
         self.env = env_gen()
         # opposing_policy_kwargs =copy.deepcopy(opposing_policy_kwargs) #TODO make a longer term solutions
         policy_kwargs['memory_queue'] = memory_queue
-        self.policy = policy_gen(*policy_args, **policy_kwargs)
+
+        self.evaluator = evaluator
+        self.evaluator_args = evaluator_args
+        self.evaluator_kwargs = evaluator_kwargs
+
+        self.policy = policy_gen(evaluator=evaluator(*evaluator_args, **evaluator_kwargs), *policy_args,
+                                 **policy_kwargs)
         self.opposing_policy = opposing_policy_gen(*opposing_policy_args, **opposing_policy_kwargs)
         # self.opposing_policy.env = self.env
         self.opposing_policy.env = env_gen()  # TODO: make this a more stabel solution -
@@ -190,6 +208,7 @@ class SelfPlayWorker(multiprocessing.Process):
         self.memory_queue = memory_queue
         self.result_queue = result_queue
         self.save_dir = save_dir
+
         super().__init__()
         if resume:
             self.load_model()
@@ -314,7 +333,6 @@ class UpdateWorker(multiprocessing.Process):
         with open(recent_file, 'rb') as f:
             self.policy.memory = torch.load(f)
         self.memory_size = len(self.policy.memory)
-
 
     def update(self):
         # if not self.update_flag.is_set():

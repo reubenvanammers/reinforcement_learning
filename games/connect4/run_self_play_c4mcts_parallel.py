@@ -23,15 +23,14 @@ def run_training():
 
     env = Connect4Env()
 
-    network = ConvNetConnect4()
-    network.share_memory()
+    # network = ConvNetConnect4()
+    # network.share_memory()
 
     policy_gen = MCTreeSearch
     policy_args = []
     policy_kwargs = dict(temperature_cutoff=3, iterations=400, min_memory=20000,
                          memory_size=500000,
-                         env_gen=Connect4Env,
-                         evaluator=network)
+                         env_gen=Connect4Env)
 
     opposing_policy_gen = OnestepLookahead
     opposing_policy_args = []
@@ -47,6 +46,7 @@ def run_training():
         policy_kwargs=policy_kwargs,
         opposing_policy_args=opposing_policy_args,
         opposing_policy_kwargs=opposing_policy_kwargs,
+        evaluator=ConvNetConnect4,
         initial_games=5000,
         epoch_length=500,
         save_dir=save_dir,

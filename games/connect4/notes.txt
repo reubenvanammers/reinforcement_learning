@@ -1,5 +1,6 @@
 Deal with how it works with enemy moves better - read up!!!!!!!!
 ADD enemy one step lookahead
+Add seperate parameter to workers - evaliutaor for mcts (or q learnign)
 
 ADD MCTS evaluator
 
