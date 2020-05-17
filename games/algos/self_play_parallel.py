@@ -40,6 +40,11 @@ try:
 except ModuleNotFoundError:
     APEX_AVAILABLE = False
     print("apex not available")
+try:
+    from torch2trt import TRTModule
+    TRT_AVAILABLE = True
+except ModuleNotFoundError:
+    TRT_AVAILABLE = False
 
 
 class SelfPlayScheduler:
@@ -48,6 +53,7 @@ class SelfPlayScheduler:
             policy_gen,
             opposing_policy_gen,
             env_gen,
+            network=None,
             policy_args=[],
             policy_kwargs={},
             opposing_policy_args=[],
@@ -66,7 +72,7 @@ class SelfPlayScheduler:
         self.policy_args = policy_args
         self.policy_kwargs = policy_kwargs
         self.opposing_policy_gen = opposing_policy_gen
-        self.opposing_policy = opposing_policy_gen(*opposing_policy_args, **opposing_policy_kwargs)
+        #self.opposing_policy = opposing_policy_gen(*opposing_policy_args, **opposing_policy_kwargs)
         self.opposing_policy_args = opposing_policy_args
         self.opposing_policy_kwargs = opposing_policy_kwargs
         self.env_gen = env_gen
@@ -76,6 +82,7 @@ class SelfPlayScheduler:
         self.self_play = self_play
         self.lr = lr
 
+        self.network = network
         self.evaluation_policy_gen = evaluation_policy_gen
         self.evaluation_policy_args = evaluation_policy_args
         self.evaluation_policy_kwargs = evaluation_policy_kwargs
@@ -99,14 +106,15 @@ class SelfPlayScheduler:
         # self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.policy.optim, 'max', patience=10, factor=0.2,
         #                                                             verbose=True)
 
-        evaluator = self.policy_kwargs["evaluator"]  # TODO - fix make nicer
+        #evaluator =evaluator self.policy_kwargs["evaluator"]  # TODO - fix make nicer
+        evaluator = self.network
         optim = torch.optim.SGD(evaluator.parameters(), weight_decay=0.0001, momentum=0.9, lr=self.lr)
-
+        evaluator.share_memory()
         # if APEX_AVAILABLE:
         #     opt_level = "O1"
         #     evaluator, optim = amp.initialize(evaluator, optim, opt_level=opt_level)
 
-        self.policy_kwargs["evaluator"] = evaluator
+        # self.policy_kwargs["evaluator"] = evaluator
 
         num_workers = num_workers or multiprocessing.cpu_count()
         player_workers = [
@@ -115,13 +123,14 @@ class SelfPlayScheduler:
                 self.memory_queue,
                 self.result_queue,
                 self.env_gen,
+                evaluator=evaluator,
                 start_time=self.start_time,
                 policy_gen=self.policy_gen,
                 opposing_policy_gen=self.opposing_policy_gen,
-                policy_args=deepcopy(self.policy_args),
-                policy_kwargs=deepcopy(self.policy_kwargs),
-                opposing_policy_args=deepcopy(self.opposing_policy_args),
-                opposing_policy_kwargs=deepcopy(self.opposing_policy_kwargs),
+                policy_args=self.policy_args,
+                policy_kwargs=self.policy_kwargs,
+                opposing_policy_args=self.opposing_policy_args,
+                opposing_policy_kwargs=self.opposing_policy_kwargs,
                 save_dir=self.save_dir,
                 resume=resume_model,
                 self_play=self.self_play,
@@ -135,7 +144,7 @@ class SelfPlayScheduler:
             w.start()
 
         # policy = self.policy_gen(*self.policy_args, **self.policy_kwargs, memory_queue=self.memory_queue, optim=optim, )
-        self.policy_kwargs["optim"] = optim
+        # self.policy_kwargs["optim"] = optim
 
         update_worker_queue = multiprocessing.JoinableQueue()
 
@@ -143,10 +152,12 @@ class SelfPlayScheduler:
         update_flag.clear()
 
         update_worker = UpdateWorker(
-            self.memory_queue,
+            memory_queue=self.memory_queue,
             policy_gen=self.policy_gen,
-            policy_args=deepcopy(self.policy_args),
-            policy_kwargs=deepcopy(self.policy_kwargs),
+            evaluator=evaluator,
+            optim=optim,
+            policy_args=self.policy_args,
+            policy_kwargs=self.policy_kwargs,
             update_flag=update_flag,
             update_worker_queue=update_worker_queue,
             save_dir=self.save_dir,
@@ -328,6 +339,7 @@ class SelfPlayWorker(Worker):
             policy_gen,
             opposing_policy_gen,
             start_time,
+            evaluator,
             policy_args=[],
             policy_kwargs={},
             opposing_policy_args=[],
@@ -341,8 +353,9 @@ class SelfPlayWorker(Worker):
     ):
         self.env_gen = env_gen
         self.env = env_gen()
+        self.evaluator=evaluator
         # opposing_policy_kwargs =copy.deepcopy(opposing_policy_kwargs) #TODO make a longer term solutions
-        policy_kwargs["memory_queue"] = memory_queue
+        #policy_kwargs["memory_queue"] = memory_queue
 
         self.policy_gen = policy_gen
         self.opposing_policy_gen = opposing_policy_gen
@@ -367,10 +380,10 @@ class SelfPlayWorker(Worker):
         super().__init__()
 
     def set_up_policies(self):
-        self.policy = self.policy_gen(*self.policy_args, **self.policy_kwargs)
+        self.policy = self.policy_gen(memory_queue=self.memory_queue,evaluator=self.evaluator,*self.policy_args, **self.policy_kwargs)
         self.policy.train(False)
 
-        self.opposing_policy_train = self.opposing_policy_gen(*self.opposing_policy_args, **self.opposing_policy_kwargs)
+        self.opposing_policy_train = self.opposing_policy_gen(evaluator=self.evaluator, *self.opposing_policy_args, **self.opposing_policy_kwargs)
 
         self.opposing_policy_train.train(False)
         # self.opposing_policy.env = self.env
@@ -476,6 +489,8 @@ class UpdateWorker(Worker):
     def __init__(
             self,
             memory_queue,
+            evaluator,
+            optim,
             policy_gen,
             policy_args,
             policy_kwargs,
@@ -486,6 +501,8 @@ class UpdateWorker(Worker):
             resume=False,
     ):
         self.memory_queue = memory_queue
+        self.evaluator=evaluator
+        self.optim=optim
         # self.policy = policy
         self.policy_gen = policy_gen
         self.policy_args = policy_args
@@ -502,7 +519,7 @@ class UpdateWorker(Worker):
         super().__init__()
 
     def run(self):
-        self.policy = self.policy_gen(memory_queue=self.memory_queue, *self.policy_args, **self.policy_kwargs)
+        self.policy = self.policy_gen(memory_queue=self.memory_queue,evaluator=self.evaluator,optim=self.optim, *self.policy_args, **self.policy_kwargs)
         self.policy.train()
 
         if self.resume:
