@@ -20,12 +20,13 @@ try:
 except Exception:
     pass
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def run_training():
 
     env = Connect4Env()
 
-    network = ConvNetConnect4()
+    network = ConvNetConnect4().to(device)
     network.share_memory()
 
     policy_gen = MCTreeSearch

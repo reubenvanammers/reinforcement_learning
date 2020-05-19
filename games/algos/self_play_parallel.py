@@ -30,7 +30,6 @@ multiprocessing_logging.install_mp_handler()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 try:
     from apex import amp
-
     if torch.cuda.is_available():
         print("Apex available")
         APEX_AVAILABLE = False
@@ -43,7 +42,8 @@ except ModuleNotFoundError:
 try:
     from torch2trt import TRTModule
     TRT_AVAILABLE = True
-except ModuleNotFoundError:
+except ModuleNotFoundError as e:
+    e
     TRT_AVAILABLE = False
 
 
@@ -82,7 +82,8 @@ class SelfPlayScheduler:
         self.self_play = self_play
         self.lr = lr
 
-        self.network = network
+        # self.network = network
+        self.network = network.to(device).share_memory()
         self.evaluation_policy_gen = evaluation_policy_gen
         self.evaluation_policy_args = evaluation_policy_args
         self.evaluation_policy_kwargs = evaluation_policy_kwargs
@@ -109,7 +110,10 @@ class SelfPlayScheduler:
         #evaluator =evaluator self.policy_kwargs["evaluator"]  # TODO - fix make nicer
         evaluator = self.network
         optim = torch.optim.SGD(evaluator.parameters(), weight_decay=0.0001, momentum=0.9, lr=self.lr)
-        evaluator.share_memory()
+        evaluator.to(device).share_memory()
+        if TRT_AVAILABLE:
+            evaluator = TRTModule(evaluator)
+        # if APEX_AVAILABLE:
         # if APEX_AVAILABLE:
         #     opt_level = "O1"
         #     evaluator, optim = amp.initialize(evaluator, optim, opt_level=opt_level)
@@ -154,7 +158,7 @@ class SelfPlayScheduler:
         update_worker = UpdateWorker(
             memory_queue=self.memory_queue,
             policy_gen=self.policy_gen,
-            evaluator=evaluator,
+            evaluator=self.network,
             optim=optim,
             policy_args=self.policy_args,
             policy_kwargs=self.policy_kwargs,
@@ -429,6 +433,7 @@ class SelfPlayWorker(Worker):
                 self.task_queue.task_done()
                 logging.info('task done')
             except Exception as e:
+                logging.info(str(e))
                 # traceback.print_exc()
                 print(str(e))
                 self.task_queue.task_done()
@@ -450,6 +455,7 @@ class SelfPlayWorker(Worker):
         return state_list, r
 
     def play_round(self, s, update=True):
+        # logging.info('playing round')
         s = s.copy()
         s_intermediate, own_a, r, done, info = self.get_and_play_moves(s)
         if done:

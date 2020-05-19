@@ -126,7 +126,7 @@ class MCTreeSearch:
             starting_state_dict=None,
     ):
         self.iterations = iterations
-        self.evaluator = evaluator.to(device)
+        self.evaluator = evaluator
         self.env_gen = env_gen
         self.optim = optim
         self.env = env_gen()
